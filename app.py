@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 DATA_GO_KR_KEY = os.getenv("DATA_GO_KR_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 st.set_page_config(
     page_title="SkyWatch",
@@ -731,6 +732,78 @@ def calc_flight_progress(cur_lat, cur_lon, dep_airport, arr_airport, speed_kmh):
         "eta_time": eta_time,
     }
 
+def analyze_flight_weather_ai(flight_info: dict, weather_info: dict, delay_info: list) -> str:
+    """
+    Claude API를 이용한 기상·운항 통합 AI 분석 코멘트 생성
+    flight_info  : 편명, 출발지, 목적지, 고도, 속도, ETA 등
+    weather_info : 목적지 공항 현재 날씨 (기온, 풍속, 강수, 하늘상태)
+    delay_info   : 목적지 공항 지연·결항 편 리스트
+    """
+    if not ANTHROPIC_API_KEY:
+        return "⚠️ AI 분석을 사용하려면 .env 파일에 ANTHROPIC_API_KEY를 설정해주세요."
+
+    # 프롬프트 구성
+    delay_text = ""
+    if delay_info:
+        delay_text = "\n".join(
+            f"  - {d.get('flight','?')} ({d.get('airline','?')}) : {d.get('remark','지연')}"
+            for d in delay_info[:5]
+        )
+    else:
+        delay_text = "  현재 지연·결항 편 없음"
+
+    sky_map = {1: "맑음", 2: "구름조금", 3: "구름많음", 4: "흐림"}
+    sky_str = sky_map.get(weather_info.get("sky"), "알 수 없음")
+    pty_map = {0: "없음", 1: "비", 2: "비/눈", 3: "눈", 4: "소나기"}
+    pty_str = pty_map.get(weather_info.get("pty", 0), "없음")
+
+    prompt = f"""당신은 항공 기상 전문 AI 어시스턴트입니다.
+아래 데이터를 분석하여 공항에서 가족을 마중 나가는 일반 시민이 이해하기 쉬운 한국어로 3~4문장의 종합 분석 코멘트를 작성해주세요.
+전문 용어는 쉽게 풀어서 설명하고, 실용적인 조언을 포함해주세요.
+
+[항공편 정보]
+- 편명: {flight_info.get('callsign', '알 수 없음')}
+- 출발지: {flight_info.get('dep', '알 수 없음')}
+- 목적지: {flight_info.get('arr', '알 수 없음')}
+- 현재 고도: {flight_info.get('alt', '알 수 없음')} ft
+- 현재 속도: {flight_info.get('speed', '알 수 없음')} km/h
+- 예상 도착: {flight_info.get('eta', '계산 중')}
+
+[목적지 공항 현재 날씨]
+- 기온: {weather_info.get('temp', '알 수 없음')}°C
+- 하늘상태: {sky_str}
+- 강수형태: {pty_str}
+- 풍속: {weather_info.get('wind_speed', '알 수 없음')} m/s
+- 습도: {weather_info.get('humidity', '알 수 없음')}%
+
+[공항 지연·결항 현황]
+{delay_text}
+
+위 데이터를 바탕으로 기상이 항공편에 미치는 영향, 현재 운항 상태, 마중 나가는 분들을 위한 실용적인 조언을 포함하여 분석해주세요."""
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 400,
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            timeout=15
+        )
+        result = resp.json()
+        if "content" in result and result["content"]:
+            return result["content"][0]["text"]
+        return "⚠️ AI 분석 결과를 가져오지 못했습니다."
+    except Exception as e:
+        return f"⚠️ AI 분석 오류: {str(e)}"
+
+
 def get_weather_forecast(nx, ny):
     """기상청 초단기예보 - 향후 6시간"""
     now = time.localtime()
@@ -1061,7 +1134,7 @@ def get_all_flight_schedule(callsigns):
             print(f"[TAGO-OK] {cs}: {dep_nm}({dep_code})→{arr_nm}({arr_code}) {airline}")
         except Exception as e:
             print(f"[ERR] schedule({cs}): {e}")
-    print(f"[TOTAL] flightSchedule: {len(result)}편 수집")
+    
     return result
 
 airborne_callsigns = [f[1].strip().upper() for f in flights if f[1] and f[1].strip() and not f[8]]
@@ -1953,6 +2026,28 @@ def bottom_panel():
                 st.session_state.current_flight = current_flight
                 st.session_state.flight_spd = (current_flight[9] or 0) * 3.6 if current_flight else 0
 
+                # ── AI 분석용 데이터 저장 ──
+                spd_kmh = (current_flight[9] or 0) * 3.6 if current_flight else 0
+                prog_ai = None
+                if current_flight and found_dep and found_dest:
+                    prog_ai = calc_flight_progress(
+                        current_flight[6], current_flight[5],
+                        found_dep, found_dest, spd_kmh
+                    )
+                st.session_state["searched_callsign"] = callsign_input
+                st.session_state["ai_callsign"] = current_flight[1] if current_flight else callsign_input
+                st.session_state["ai_dep"]   = found_dep["name"]  if found_dep  else "알 수 없음"
+                st.session_state["ai_arr"]   = found_dest["name"] if found_dest else "알 수 없음"
+                st.session_state["ai_alt"]   = current_flight[7]  if current_flight else "알 수 없음"
+                st.session_state["ai_speed"] = round(spd_kmh)     if spd_kmh else "알 수 없음"
+                st.session_state["ai_eta"]   = prog_ai["eta_time"] if prog_ai and prog_ai.get("eta_time") else "계산 중"
+                if found_dest:
+                    st.session_state["ai_weather"] = get_airport_weather(found_dest["nx"], found_dest["ny"])
+                    st.session_state["ai_delays"]  = get_airport_delays(found_dest["keyword"])
+                else:
+                    st.session_state["ai_weather"] = {}
+                    st.session_state["ai_delays"]  = []
+
     dest_airport   = st.session_state.get("dest_airport")
     dep_airport    = st.session_state.get("dep_airport")
     current_flight = st.session_state.get("current_flight")
@@ -2161,6 +2256,59 @@ def bottom_panel():
 
 # ── fragment 종료 + 호출 ──
 bottom_panel()
+
+# ── AI 기상·운항 종합 분석 패널 ──
+st.markdown("---")
+st.markdown('<div class="section-title">🤖 AI 기상·운항 종합 분석</div>', unsafe_allow_html=True)
+
+ai_col1, ai_col2 = st.columns([3, 1])
+with ai_col1:
+    st.markdown(
+        '<div style="font-size:0.82rem;color:#7ab3d4;">편명을 검색한 뒤 아래 버튼을 누르면 Claude AI가 기상·운항 데이터를 종합 분석해드립니다.</div>',
+        unsafe_allow_html=True
+    )
+with ai_col2:
+    run_ai = st.button("✨ AI 분석 실행", use_container_width=True)
+
+if run_ai:
+    # 세션에서 현재 편명 검색 결과 수집
+    searched = st.session_state.get("searched_callsign", "")
+    if not searched:
+        st.warning("먼저 상단에서 편명을 검색해주세요.")
+    else:
+        with st.spinner("🤖 Claude AI가 분석 중입니다..."):
+            # flight_info 구성
+            f_info = {
+                "callsign": st.session_state.get("ai_callsign", searched),
+                "dep":      st.session_state.get("ai_dep", "알 수 없음"),
+                "arr":      st.session_state.get("ai_arr", "알 수 없음"),
+                "alt":      st.session_state.get("ai_alt", "알 수 없음"),
+                "speed":    st.session_state.get("ai_speed", "알 수 없음"),
+                "eta":      st.session_state.get("ai_eta", "계산 중"),
+            }
+            # weather_info 구성
+            w_info = st.session_state.get("ai_weather", {})
+            # delay_info 구성
+            d_info = st.session_state.get("ai_delays", [])
+
+            analysis = analyze_flight_weather_ai(f_info, w_info, d_info)
+
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #0d2137, #1a3a5c);
+            border: 1px solid #2E75B6;
+            border-left: 5px solid #4fc3f7;
+            border-radius: 12px;
+            padding: 18px 20px;
+            margin-top: 10px;
+            font-size: 0.88rem;
+            color: #e0e6f0;
+            line-height: 1.8;
+        ">
+            <div style="font-size:0.75rem;color:#4fc3f7;margin-bottom:8px;">🤖 Claude AI 종합 분석 결과</div>
+            {analysis}
+        </div>
+        """, unsafe_allow_html=True)
 
 # ── 푸터 ──
 st.markdown("---")

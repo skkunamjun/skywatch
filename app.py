@@ -1134,7 +1134,7 @@ def get_all_flight_schedule(callsigns):
             print(f"[TAGO-OK] {cs}: {dep_nm}({dep_code})→{arr_nm}({arr_code}) {airline}")
         except Exception as e:
             print(f"[ERR] schedule({cs}): {e}")
-    
+
     return result
 
 airborne_callsigns = [f[1].strip().upper() for f in flights if f[1] and f[1].strip() and not f[8]]
@@ -2163,6 +2163,7 @@ def bottom_panel():
                 sky_i   = sky_icon(w.get("sky"), w.get("rain"), w.get("wind_speed"))
                 w_arrow = wind_arrow(w["wind_dir"])
                 rain_val = w["rain"] or 0
+                rain_html = f'<div style="margin-top:8px;padding:6px 10px;background:#2d1800;border-radius:6px;color:#ffa726;font-size:0.82rem;">⚠️ 강수 {rain_val}mm</div>' if rain_val > 0 else '<div style="margin-top:8px;padding:6px 10px;background:#0d2200;border-radius:6px;color:#76c442;font-size:0.82rem;">✅ 맑음 · 강수 없음</div>'
                 st.markdown(f"""
                 <div class="result-card">
                     <div style="display:flex;align-items:center;gap:12px;">
@@ -2172,7 +2173,7 @@ def bottom_panel():
                             <div style="font-size:0.78rem;color:#7ab3d4;">습도 {w["humidity"] or 0}% &nbsp;|&nbsp; 💨{w_arrow} {w["wind_speed"] or 0}m/s</div>
                         </div>
                     </div>
-                    {"<div style=\'margin-top:8px;padding:6px 10px;background:#2d1800;border-radius:6px;color:#ffa726;font-size:0.82rem;\'>⚠️ 강수 " + str(rain_val) + "mm</div>" if rain_val > 0 else "<div style=\'margin-top:8px;padding:6px 10px;background:#0d2200;border-radius:6px;color:#76c442;font-size:0.82rem;\'>✅ 맑음 · 강수 없음</div>"}
+                    {rain_html}
                 </div>
                 """, unsafe_allow_html=True)
 

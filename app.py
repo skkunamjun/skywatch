@@ -4,11 +4,22 @@ import time
 import json
 import os
 import math
-from dotenv import load_dotenv
 
-load_dotenv()
-DATA_GO_KR_KEY = os.getenv("DATA_GO_KR_KEY")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+# Streamlit Cloud는 st.secrets, 로컬은 .env 파일 사용
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+def get_secret(key):
+    try:
+        return st.secrets[key]
+    except Exception:
+        return os.getenv(key)
+
+DATA_GO_KR_KEY    = get_secret("DATA_GO_KR_KEY")
+ANTHROPIC_API_KEY = get_secret("ANTHROPIC_API_KEY")
 
 st.set_page_config(
     page_title="SkyWatch",

@@ -720,6 +720,62 @@ def get_delayed_flights():
     """전체 지연·결항 조회"""
     return get_airport_delays("")
 
+def get_fids_flights(airport_keyword, max_rows=15):
+    """공항 전체 출도착 현황 조회 (FIDS 전광판용)"""
+    results = []
+    today = time.strftime("%Y%m%d")
+    urls = [
+        ("http://apis.data.go.kr/B551177/StatusOfPassengerFlightsOdp/getPassengerDeparturesDump", "출발"),
+        ("http://apis.data.go.kr/B551177/StatusOfPassengerFlightsOdp/getPassengerArrivalsDump", "도착"),
+    ]
+    for url, direction in urls:
+        params = {
+            "serviceKey": DATA_GO_KR_KEY,
+            "pageNo": 1, "numOfRows": 50,
+            "type": "json", "date": today
+        }
+        try:
+            r = requests.get(url, params=params, timeout=8)
+            if not r.text or not r.text.strip():
+                continue
+            data = r.json()
+            items = data.get("response", {}).get("body", {}).get("items", {})
+            if not items:
+                continue
+            item_list = items.get("item", [])
+            if not item_list:
+                continue
+            if isinstance(item_list, dict):
+                item_list = [item_list]
+            for item in item_list:
+                airport = item.get("airport", "") or item.get("airportKorean", "") or ""
+                if airport_keyword and airport_keyword not in airport:
+                    continue
+                remark = item.get("remark", "") or item.get("remarkKorean", "") or ""
+                sched = str(item.get("scheduleDateTime", "") or item.get("std", "") or "")
+                sched_fmt = f"{sched[8:10]}:{sched[10:12]}" if len(sched) >= 12 else sched
+                is_cancel = any(kw in str(remark) for kw in ["결항","Cancel","취소"])
+                is_delay  = any(kw in str(remark) for kw in ["지연","Delay"])
+                if remark and not any(kw in remark for kw in ["정상","운항","출발","도착"]):
+                    status = "🚫 결항" if is_cancel else ("🕐 지연" if is_delay else "✅ 정상")
+                else:
+                    status = "✅ 정상"
+                results.append({
+                    "direction": direction,
+                    "flight_id": item.get("flightId", "—"),
+                    "airline":   item.get("airline", "") or item.get("airlineKorean", ""),
+                    "airport":   airport,
+                    "sched":     sched_fmt,
+                    "remark":    remark or "정상 운항",
+                    "status":    status,
+                    "is_cancel": is_cancel,
+                    "is_delay":  is_delay,
+                })
+        except Exception:
+            pass
+    results.sort(key=lambda x: x["sched"])
+    return results[:max_rows]
+
 def calc_flight_progress(cur_lat, cur_lon, dep_airport, arr_airport, speed_kmh):
     """현재 위치 기준 비행 진행률(%), 남은 거리, ETA 계산"""
     if not dep_airport or not arr_airport:
@@ -1931,11 +1987,23 @@ def bottom_panel():
                     st.markdown(f"""
                     <div class="result-card">
                         <div class="result-title">✈️ {callsign_input.upper()} {("— "+desc) if desc else ""}</div>
-                        <div>
-                            <div class="result-metric"><div class="rm-val">{alt:.0f}m</div><div class="rm-label">고도</div></div>
-                            <div class="result-metric"><div class="rm-val">{spd:.0f}km/h</div><div class="rm-label">속도</div></div>
-                            <div class="result-metric"><div class="rm-val">{hdg:.0f}°</div><div class="rm-label">방향</div></div>
-                            <div class="result-metric"><div class="rm-val">{cty}</div><div class="rm-label">등록국</div></div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;">
+                            <div style="background:#0a1628;border-radius:6px;padding:8px;text-align:center;">
+                                <div style="font-size:1.1rem;font-weight:700;color:#4fc3f7;">{alt:.0f}m</div>
+                                <div style="font-size:0.7rem;color:#4a6080;">고도</div>
+                            </div>
+                            <div style="background:#0a1628;border-radius:6px;padding:8px;text-align:center;">
+                                <div style="font-size:1.1rem;font-weight:700;color:#4fc3f7;">{spd:.0f}km/h</div>
+                                <div style="font-size:0.7rem;color:#4a6080;">속도</div>
+                            </div>
+                            <div style="background:#0a1628;border-radius:6px;padding:8px;text-align:center;">
+                                <div style="font-size:1.1rem;font-weight:700;color:#ffa726;">{hdg:.0f}°</div>
+                                <div style="font-size:0.7rem;color:#4a6080;">방향</div>
+                            </div>
+                            <div style="background:#0a1628;border-radius:6px;padding:8px;text-align:center;">
+                                <div style="font-size:1.0rem;font-weight:700;color:#76c442;">{cty}</div>
+                                <div style="font-size:0.7rem;color:#4a6080;">등록국</div>
+                            </div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -1975,13 +2043,20 @@ def bottom_panel():
                     sched_arr_t = f"{arr_t[8:10]}:{arr_t[10:12]}" if len(arr_t) >= 12 else arr_t
 
                     st.markdown(f"""
-                    <div class="result-card">
+                    <div class="result-card" style="margin-top:6px;">
                         <div class="result-title">🛫 국내선 운항정보</div>
-                        <div style="color:#b0c4d8;font-size:0.88rem;">
-                            {airline}<br>
-                            <b style="color:#4fc3f7">{dep_nm}</b> {sched_dep_t}
-                            &nbsp;→&nbsp;
-                            <b style="color:#ffa726">{arr_nm}</b> {sched_arr_t}
+                        <div style="font-size:0.78rem;color:#7ab3d4;margin:4px 0 8px 0;">{airline}</div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;
+                                    background:#0a1628;border-radius:8px;padding:10px;">
+                            <div style="text-align:center;">
+                                <div style="font-size:1.0rem;font-weight:700;color:#4fc3f7;">{dep_nm[:3] if dep_nm else "—"}</div>
+                                <div style="font-size:0.7rem;color:#4a6080;">{sched_dep_t}</div>
+                            </div>
+                            <div style="color:#4a6080;font-size:1.2rem;">→</div>
+                            <div style="text-align:center;">
+                                <div style="font-size:1.0rem;font-weight:700;color:#ffa726;">{arr_nm[:3] if arr_nm else "—"}</div>
+                                <div style="font-size:0.7rem;color:#4a6080;">{sched_arr_t}</div>
+                            </div>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -2268,6 +2343,85 @@ def bottom_panel():
 
 # ── fragment 종료 + 호출 ──
 bottom_panel()
+
+# ── FIDS 전광판 (전체 가로) ──
+@st.fragment
+def fids_panel():
+    st.markdown("---")
+    st.markdown('''
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <div style="font-size:1.1rem;font-weight:700;color:#4fc3f7;letter-spacing:2px;">📺 실시간 공항 출도착 현황 (FIDS)</div>
+        <div style="font-size:0.75rem;color:#4a6080;background:#0a1628;padding:3px 10px;border-radius:10px;border:1px solid #1a3a5c;">
+            편명 검색 시 해당 공항 기준 표시
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+    dest_airport = st.session_state.get("dest_airport")
+    airport_kw   = dest_airport["keyword"] if dest_airport else ""
+    airport_nm   = dest_airport["name"]    if dest_airport else "전체"
+
+    fids_col1, fids_col2 = st.columns(2)
+
+    for col, direction in [(fids_col1, "출발"), (fids_col2, "도착")]:
+        with col:
+            icon = "🛫" if direction == "출발" else "🛬"
+            st.markdown(f'''
+            <div style="font-size:0.88rem;font-weight:700;color:#e0e6f0;
+                        background:linear-gradient(90deg,#0d2137,#1a3a5c);
+                        padding:8px 14px;border-radius:8px;margin-bottom:6px;
+                        border-left:4px solid #4fc3f7;">
+                {icon} {airport_nm} {direction} 현황
+            </div>
+            ''', unsafe_allow_html=True)
+
+            flights = get_fids_flights(airport_kw)
+            dir_flights = [f for f in flights if f["direction"] == direction]
+
+            if not dir_flights:
+                st.markdown('''
+                <div style="text-align:center;padding:20px;color:#4a6080;
+                            border:1px dashed #1a3a5c;border-radius:8px;font-size:0.82rem;">
+                    🔍 편명을 검색하면 해당 공항의<br>실시간 운항 현황이 표시됩니다
+                </div>
+                ''', unsafe_allow_html=True)
+            else:
+                # 헤더
+                st.markdown('''
+                <div style="display:grid;grid-template-columns:1fr 1.2fr 0.8fr 1.2fr;
+                            gap:4px;padding:5px 10px;
+                            background:#0a1628;border-radius:6px;
+                            font-size:0.72rem;color:#4a6080;font-weight:700;
+                            margin-bottom:4px;">
+                    <div>편명</div>
+                    <div>항공사</div>
+                    <div>예정</div>
+                    <div>상태</div>
+                </div>
+                ''', unsafe_allow_html=True)
+
+                for f in dir_flights:
+                    is_cancel = f["is_cancel"]
+                    is_delay  = f["is_delay"]
+                    row_bg    = "#2d0a0a" if is_cancel else ("#2d1800" if is_delay else "#0a1628")
+                    status_color = "#e74c3c" if is_cancel else ("#ffa726" if is_delay else "#76c442")
+                    status_text  = f["status"]
+
+                    st.markdown(f'''
+                    <div style="display:grid;grid-template-columns:1fr 1.2fr 0.8fr 1.2fr;
+                                gap:4px;padding:7px 10px;
+                                background:{row_bg};
+                                border-radius:6px;margin-bottom:3px;
+                                border-left:3px solid {status_color};
+                                font-size:0.78rem;">
+                        <div style="color:#4fc3f7;font-weight:700;">{f["flight_id"]}</div>
+                        <div style="color:#b0c4d8;">{f["airline"][:8] if f["airline"] else "—"}</div>
+                        <div style="color:#e0e6f0;">{f["sched"]}</div>
+                        <div style="color:{status_color};font-weight:600;">{status_text}</div>
+                    </div>
+                    ''', unsafe_allow_html=True)
+
+fids_panel()
 
 # ── AI 기상·운항 종합 분석 패널 (fragment - 독립 렌더링) ──
 @st.fragment

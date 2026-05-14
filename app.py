@@ -2269,58 +2269,60 @@ def bottom_panel():
 # ── fragment 종료 + 호출 ──
 bottom_panel()
 
-# ── AI 기상·운항 종합 분석 패널 ──
-st.markdown("---")
-st.markdown('<div class="section-title">🤖 AI 기상·운항 종합 분석</div>', unsafe_allow_html=True)
+# ── AI 기상·운항 종합 분석 패널 (fragment - 독립 렌더링) ──
+@st.fragment
+def ai_analysis_panel():
+    st.markdown("---")
+    st.markdown('<div class="section-title">🤖 AI 기상·운항 종합 분석</div>', unsafe_allow_html=True)
 
-ai_col1, ai_col2 = st.columns([3, 1])
-with ai_col1:
-    st.markdown(
-        '<div style="font-size:0.82rem;color:#7ab3d4;">편명을 검색한 뒤 아래 버튼을 누르면 Claude AI가 기상·운항 데이터를 종합 분석해드립니다.</div>',
-        unsafe_allow_html=True
-    )
-with ai_col2:
-    run_ai = st.button("✨ AI 분석 실행", use_container_width=True)
+    ai_col1, ai_col2 = st.columns([3, 1])
+    with ai_col1:
+        st.markdown(
+            '<div style="font-size:0.82rem;color:#7ab3d4;">편명을 검색한 뒤 아래 버튼을 누르면 Claude AI가 기상·운항 데이터를 종합 분석해드립니다.</div>',
+            unsafe_allow_html=True
+        )
+    with ai_col2:
+        run_ai = st.button("✨ AI 분석 실행", use_container_width=True)
 
-if run_ai:
-    # 세션에서 현재 편명 검색 결과 수집
-    searched = st.session_state.get("searched_callsign", "")
-    if not searched:
-        st.warning("먼저 상단에서 편명을 검색해주세요.")
-    else:
-        with st.spinner("🤖 Claude AI가 분석 중입니다..."):
-            # flight_info 구성
-            f_info = {
-                "callsign": st.session_state.get("ai_callsign", searched),
-                "dep":      st.session_state.get("ai_dep", "알 수 없음"),
-                "arr":      st.session_state.get("ai_arr", "알 수 없음"),
-                "alt":      st.session_state.get("ai_alt", "알 수 없음"),
-                "speed":    st.session_state.get("ai_speed", "알 수 없음"),
-                "eta":      st.session_state.get("ai_eta", "계산 중"),
-            }
-            # weather_info 구성
-            w_info = st.session_state.get("ai_weather", {})
-            # delay_info 구성
-            d_info = st.session_state.get("ai_delays", [])
+    if run_ai:
+        searched = st.session_state.get("searched_callsign", "")
+        if not searched:
+            st.warning("먼저 상단에서 편명을 검색해주세요.")
+        else:
+            with st.spinner("🤖 Claude AI가 분석 중입니다..."):
+                f_info = {
+                    "callsign": st.session_state.get("ai_callsign", searched),
+                    "dep":      st.session_state.get("ai_dep", "알 수 없음"),
+                    "arr":      st.session_state.get("ai_arr", "알 수 없음"),
+                    "alt":      st.session_state.get("ai_alt", "알 수 없음"),
+                    "speed":    st.session_state.get("ai_speed", "알 수 없음"),
+                    "eta":      st.session_state.get("ai_eta", "계산 중"),
+                }
+                w_info = st.session_state.get("ai_weather", {})
+                d_info = st.session_state.get("ai_delays", [])
+                analysis = analyze_flight_weather_ai(f_info, w_info, d_info)
+                st.session_state["ai_result"] = analysis
 
-            analysis = analyze_flight_weather_ai(f_info, w_info, d_info)
+        if st.session_state.get("ai_result"):
+            analysis_text = st.session_state["ai_result"]
+            st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #0d2137, #1a3a5c);
+                border: 1px solid #2E75B6;
+                border-left: 5px solid #4fc3f7;
+                border-radius: 12px;
+                padding: 18px 20px;
+                margin-top: 10px;
+                font-size: 0.88rem;
+                color: #e0e6f0;
+                line-height: 1.8;
+            ">
+                <div style="font-size:0.75rem;color:#4fc3f7;margin-bottom:8px;">🤖 Claude AI 종합 분석 결과</div>
+                {analysis_text}
+            </div>
+            """, unsafe_allow_html=True)
 
-        st.markdown(f"""
-        <div style="
-            background: linear-gradient(135deg, #0d2137, #1a3a5c);
-            border: 1px solid #2E75B6;
-            border-left: 5px solid #4fc3f7;
-            border-radius: 12px;
-            padding: 18px 20px;
-            margin-top: 10px;
-            font-size: 0.88rem;
-            color: #e0e6f0;
-            line-height: 1.8;
-        ">
-            <div style="font-size:0.75rem;color:#4fc3f7;margin-bottom:8px;">🤖 Claude AI 종합 분석 결과</div>
-            {analysis}
-        </div>
-        """, unsafe_allow_html=True)
+ai_analysis_panel()
 
 # ── 푸터 ──
 st.markdown("---")

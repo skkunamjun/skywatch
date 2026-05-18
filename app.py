@@ -20,6 +20,7 @@ def get_secret(key):
 
 DATA_GO_KR_KEY    = get_secret("DATA_GO_KR_KEY")
 ANTHROPIC_API_KEY = get_secret("ANTHROPIC_API_KEY")
+VWORLD_API_KEY    = get_secret("VWORLD_API_KEY")
 
 st.set_page_config(
     page_title="SkyWatch",
@@ -408,7 +409,7 @@ def get_flights():
     # ── 1. airplanes.live (반경 500nm로 확대) ──
     try:
         r = requests.get(
-            "https://api.airplanes.live/v2/point/35.0/125.0/500",
+            "https://api.airplanes.live/v2/point/34.5/127.5/600",
             headers={"User-Agent": "SkyWatch/3.0 (Korea Air Traffic Monitor)"},
             timeout=15
         )
@@ -522,6 +523,36 @@ def get_weather_data():
             results.append({"name": station["name"], "lat": station["lat"], "lon": station["lon"],
                             "temp": None, "rain": None, "wind_speed": None, "wind_dir": None, "humidity": None, "sky": None})
     return results
+
+def get_radar_image_url():
+    """기상청 레이더 합성영상 URL 반환 (최근 5분 단위)"""
+    import datetime
+    now = datetime.datetime.now()
+    minute = (now.minute // 5) * 5
+    base = now.replace(minute=minute, second=0, microsecond=0) - datetime.timedelta(minutes=10)
+    tm = base.strftime("%Y%m%d%H%M")
+    try:
+        url = "http://apis.data.go.kr/1360000/RadarImgInfoService/getCmpImg"
+        params = {
+            "serviceKey": DATA_GO_KR_KEY,
+            "numOfRows": 1, "pageNo": 1,
+            "dataType": "JSON",
+            "prodType": "CMP_WRC",
+            "startDateTime": tm,
+            "endDateTime": tm,
+        }
+        r = requests.get(url, params=params, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            items = data.get("response", {}).get("body", {}).get("items", {}).get("item", [])
+            if items:
+                item = items[0] if isinstance(items, list) else items
+                img_url = item.get("fileUrl") or item.get("imgUrl") or ""
+                if img_url:
+                    return img_url
+    except Exception as e:
+        pass
+    return ""
 
 def get_airport_weather(nx, ny):
     now = time.localtime()
@@ -1013,6 +1044,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ── 지도 ──
+
+# ── 0 Layer: 전체 항공기 현황 ──
+st.markdown("---")
+st.markdown('<div class="section-title">📡 전체 항공기 현황</div>', unsafe_allow_html=True)
 st.markdown(f"""
 <div class="dash-grid">
     <div class="dash-card" style="--accent:#4fc3f7;">
@@ -1048,11 +1084,61 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 기상 특보 배너 제거됨
+# ── AI 기상·운항 종합 분석 패널 (fragment - 독립 렌더링) ──
+@st.fragment
+def ai_analysis_panel():
+    st.markdown("---")
+    st.markdown('<div class="section-title">🤖 AI 기상·운항 종합 분석</div>', unsafe_allow_html=True)
 
-st.markdown('<hr class="dash-divider">', unsafe_allow_html=True)
+    ai_col1, ai_col2 = st.columns([3, 1])
+    with ai_col1:
+        st.markdown(
+            '<div style="font-size:0.82rem;color:#7ab3d4;">편명을 검색한 뒤 아래 버튼을 누르면 Claude AI가 기상·운항 데이터를 종합 분석해드립니다.</div>',
+            unsafe_allow_html=True
+        )
+    with ai_col2:
+        run_ai = st.button("✨ AI 분석 실행", use_container_width=True)
 
-# ── 지도 ──
+    if run_ai:
+        searched = st.session_state.get("searched_callsign", "")
+        if not searched:
+            st.warning("먼저 상단에서 편명을 검색해주세요.")
+        else:
+            with st.spinner("🤖 Claude AI가 분석 중입니다..."):
+                f_info = {
+                    "callsign": st.session_state.get("ai_callsign", searched),
+                    "dep":      st.session_state.get("ai_dep", "알 수 없음"),
+                    "arr":      st.session_state.get("ai_arr", "알 수 없음"),
+                    "alt":      st.session_state.get("ai_alt", "알 수 없음"),
+                    "speed":    st.session_state.get("ai_speed", "알 수 없음"),
+                    "eta":      st.session_state.get("ai_eta", "계산 중"),
+                }
+                w_info = st.session_state.get("ai_weather", {})
+                d_info = st.session_state.get("ai_delays", [])
+                analysis = analyze_flight_weather_ai(f_info, w_info, d_info)
+                st.session_state["ai_result"] = analysis
+
+        if st.session_state.get("ai_result"):
+            analysis_text = st.session_state["ai_result"]
+            st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #0d2137, #1a3a5c);
+                border: 1px solid #2E75B6;
+                border-left: 5px solid #4fc3f7;
+                border-radius: 12px;
+                padding: 18px 20px;
+                margin-top: 10px;
+                font-size: 0.88rem;
+                color: #e0e6f0;
+                line-height: 1.8;
+            ">
+                <div style="font-size:0.75rem;color:#4fc3f7;margin-bottom:8px;">🤖 Claude AI 종합 분석 결과</div>
+                {analysis_text}
+            </div>
+            """, unsafe_allow_html=True)
+
+ai_analysis_panel()
+
 st.markdown('<div class="section-title">🗺️ 실시간 항공 레이더 &nbsp;<span style="font-size:0.72rem;color:#5a8aaa;font-weight:400;">Korea Air Traffic Monitor</span></div>', unsafe_allow_html=True)
 
 col_t1, col_t2 = st.columns(2)
@@ -1215,6 +1301,8 @@ if _tago_cache:
 flight_schedule = get_all_flight_schedule(tuple(airborne_callsigns))
 flight_schedule_json = json.dumps(flight_schedule, ensure_ascii=False)
 
+vworld_key = VWORLD_API_KEY or ""
+radar_img_url = get_radar_image_url()
 map_html = f"""
 <!DOCTYPE html>
 <html>
@@ -1303,6 +1391,7 @@ map_html = f"""
     <div id="map"></div>
     <canvas id="weatherCanvas"></canvas>
     <div class="ctrl-box">
+        <label><input type="checkbox" id="showRadar" checked> 🛰️ 레이더</label>
         <label><input type="checkbox" id="showRain" checked> 🌧️ 강수</label>
         <label><input type="checkbox" id="showWind" checked> 💨 바람</label>
         <label><input type="checkbox" id="showPlanes" checked> ✈️ 항공기</label>
@@ -1321,13 +1410,68 @@ map_html = f"""
 <script>
 var map = L.map('map', {{zoomControl:true}}).setView([36.5, 127.5], 7);
 
-// ── 타일: OSM 표준 (가장 안정적) ──
-L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxZoom: 18,
-    tileSize: 256,
-    zoomOffset: 0
-}}).addTo(map);
+// ── 타일: V-World 배경지도 (국토교통부) ──
+var vworldKey = "{vworld_key}";
+
+// OSM을 기본으로 먼저 로드 (항상 표시 보장)
+var osmLayer = L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+    opacity: 1,
+}});
+osmLayer.addTo(map);
+
+// V-World 키가 있으면 위에 덮어씌우기
+if(vworldKey) {{
+    var vworldLayer = L.tileLayer(
+        'https://api.vworld.kr/req/wmts/1.0.0/' + vworldKey + '/Base/{{z}}/{{y}}/{{x}}.png',
+        {{
+            attribution: '&copy; <a href="https://www.vworld.kr">V-World (국토교통부)</a>',
+            maxZoom: 19,
+            tileSize: 256,
+            errorTileUrl: '',
+        }}
+    );
+    var vworldOk = false;
+    vworldLayer.on('tileload', function() {{
+        if(!vworldOk) {{
+            vworldOk = true;
+            osmLayer.remove(); // V-World 성공 시 OSM 제거
+        }}
+    }});
+    vworldLayer.addTo(map);
+}}
+
+// ── 기상청 레이더 오버레이 ──
+var radarImgUrl = "{radar_img_url}";
+var radarLayer = null;
+
+function addRadarOverlay(url) {{
+    if(!url) return;
+    // 한반도 bbox (WGS84)
+    var bounds = [[33.0, 124.0], [38.5, 130.5]];
+    if(radarLayer) map.removeLayer(radarLayer);
+    radarLayer = L.imageOverlay(url, bounds, {{
+        opacity: 0.55,
+        interactive: false,
+        zIndex: 400,
+    }});
+    if(document.getElementById('showRadar') && document.getElementById('showRadar').checked) {{
+        radarLayer.addTo(map);
+    }}
+}}
+
+if(radarImgUrl) addRadarOverlay(radarImgUrl);
+
+// 레이더 체크박스 이벤트
+document.addEventListener('DOMContentLoaded', function() {{
+    var cb = document.getElementById('showRadar');
+    if(cb) cb.addEventListener('change', function() {{
+        if(!radarLayer) return;
+        if(this.checked) radarLayer.addTo(map);
+        else map.removeLayer(radarLayer);
+    }});
+}});
 
 // 한국 경계선
 fetch('https://raw.githubusercontent.com/southkorea/southkorea-maps/master/kostat/2018/json/skorea-provinces-2018-geo.json')
@@ -1415,9 +1559,10 @@ airportsData.forEach(function(a) {{
 }});
 
 document.getElementById('showAirports').addEventListener('change', function() {{
+    var show = this.checked;
     airportMarkers.forEach(function(m) {{
-        if(this.checked) map.addLayer(m); else map.removeLayer(m);
-    }}.bind(this));
+        if(show) map.addLayer(m); else map.removeLayer(m);
+    }});
 }});
 
 // ── 항공기 체크박스 ──
@@ -1456,48 +1601,106 @@ function getColor(alt, on_ground) {{
 
 function getPlaneIcon(heading, color, isSelected, onGround) {{
     var glow = isSelected
-        ? 'filter:drop-shadow(0 0 6px '+color+') drop-shadow(0 0 12px '+color+');'
-        : 'filter:drop-shadow(1px 1px 2px rgba(0,0,0,0.5));';
-    var size = isSelected ? '20px' : (onGround ? '14px' : '17px');
-    var opacity = onGround ? '0.65' : '1';
+        ? 'filter:drop-shadow(0 0 8px '+color+') drop-shadow(0 0 16px '+color+');'
+        : 'filter:drop-shadow(1px 1px 3px rgba(0,0,0,0.7));';
+    var size   = isSelected ? '28px' : (onGround ? '18px' : '22px');
+    var boxSz  = isSelected ? 32 : (onGround ? 22 : 26);
+    var opacity = onGround ? '0.75' : '1';
+    var border  = isSelected ? 'outline:2px solid '+color+';border-radius:50%;' : '';
     return L.divIcon({{
         className: '',
-        html: '<div style="transform:rotate('+(heading-90)+'deg);font-size:'+size+';color:'+color+';opacity:'+opacity+';'+glow+'width:22px;height:22px;display:flex;align-items:center;justify-content:center;transition:all 0.3s;">✈</div>',
-        iconSize: [22, 22], iconAnchor: [11, 11]
+        html: '<div style="transform:rotate('+(heading-90)+'deg);font-size:'+size+';color:'+color+';opacity:'+opacity+';'+glow+border+'width:'+boxSz+'px;height:'+boxSz+'px;display:flex;align-items:center;justify-content:center;transition:all 0.3s;">✈</div>',
+        iconSize: [boxSz, boxSz], iconAnchor: [boxSz/2, boxSz/2]
     }});
+}}
+
+// ── 항공사 코드 → 로고/색상 매핑 ──
+var airlineMap = {{
+    'KE': {{name:'대한항공',    color:'#003087', logo:'https://content.airhex.com/content/logos/airlines_KE_50_50_s.png'}},
+    'OZ': {{name:'아시아나',    color:'#e31837', logo:'https://content.airhex.com/content/logos/airlines_OZ_50_50_s.png'}},
+    '7C': {{name:'제주항공',    color:'#ff6600', logo:'https://content.airhex.com/content/logos/airlines_7C_50_50_s.png'}},
+    'LJ': {{name:'진에어',      color:'#0033a0', logo:'https://content.airhex.com/content/logos/airlines_LJ_50_50_s.png'}},
+    'BX': {{name:'에어부산',    color:'#00539b', logo:'https://content.airhex.com/content/logos/airlines_BX_50_50_s.png'}},
+    'TW': {{name:'티웨이',      color:'#e4002b', logo:'https://content.airhex.com/content/logos/airlines_TW_50_50_s.png'}},
+    'RS': {{name:'에어서울',    color:'#ff6600', logo:'https://content.airhex.com/content/logos/airlines_RS_50_50_s.png'}},
+    'ZE': {{name:'이스타항공',  color:'#ff6200', logo:'https://content.airhex.com/content/logos/airlines_ZE_50_50_s.png'}},
+    'RF': {{name:'에어인천',    color:'#003087', logo:''}},
+    'NH': {{name:'ANA',        color:'#13448f', logo:'https://content.airhex.com/content/logos/airlines_NH_50_50_s.png'}},
+    'JL': {{name:'JAL',        color:'#e60012', logo:'https://content.airhex.com/content/logos/airlines_JL_50_50_s.png'}},
+    'CX': {{name:'캐세이퍼시픽',color:'#006564', logo:'https://content.airhex.com/content/logos/airlines_CX_50_50_s.png'}},
+    'CA': {{name:'중국국제항공',color:'#e31837', logo:'https://content.airhex.com/content/logos/airlines_CA_50_50_s.png'}},
+    'MU': {{name:'중국동방항공',color:'#004b97', logo:'https://content.airhex.com/content/logos/airlines_MU_50_50_s.png'}},
+    'SQ': {{name:'싱가포르항공',color:'#004b87', logo:'https://content.airhex.com/content/logos/airlines_SQ_50_50_s.png'}},
+    'TG': {{name:'타이항공',    color:'#4b0082', logo:'https://content.airhex.com/content/logos/airlines_TG_50_50_s.png'}},
+    'UA': {{name:'유나이티드',  color:'#003087', logo:'https://content.airhex.com/content/logos/airlines_UA_50_50_s.png'}},
+    'AA': {{name:'아메리칸',    color:'#e31837', logo:'https://content.airhex.com/content/logos/airlines_AA_50_50_s.png'}},
+    'EK': {{name:'에미레이트',  color:'#c60c30', logo:'https://content.airhex.com/content/logos/airlines_EK_50_50_s.png'}},
+    'QR': {{name:'카타르항공',  color:'#5c0632', logo:'https://content.airhex.com/content/logos/airlines_QR_50_50_s.png'}},
+}};
+
+function getAirlineInfo(callsign) {{
+    if(!callsign) return {{name:'', color:'#1565c0', logo:''}};
+    var code = callsign.replace(/[0-9]/g,'').substring(0,2).toUpperCase();
+    return airlineMap[code] || {{name:'', color:'#1565c0', logo:''}};
+}}
+
+function getAircraftPhoto(icao) {{
+    // airplanes.live 항공기 사진 API
+    if(!icao) return '';
+    return 'https://api.airplanes.live/v2/aircraft-image/' + icao;
 }}
 
 function makePopup(f) {{
     var altFt = Math.round(f.altitude * 3.28084);
-    var statusColor = f.on_ground ? '#757575' : '#2e7d32';
-    var statusTxt   = f.on_ground ? '🛬 지상 대기' : '✈️ 비행 중';
-    var descHtml = f.desc ? '<div style="font-size:11px;color:rgba(255,255,255,0.8);margin-top:2px;">' + f.desc + '</div>' : '';
-    return [
-        '<div style="font-family:Arial,sans-serif;min-width:200px;border-radius:10px;overflow:hidden;">',
-        '<div style="background:linear-gradient(90deg,#1565c0,#1976d2);padding:10px 14px;">',
-        '<div style="font-size:14px;font-weight:700;color:#fff;letter-spacing:1px;">✈ ' + f.callsign + '</div>',
-        descHtml,
-        '</div>',
-        '<div style="padding:10px 12px;background:#fff;">',
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">',
-        '<div style="background:#e3f2fd;border-radius:6px;padding:6px;text-align:center;">',
-        '<div style="font-size:13px;font-weight:700;color:#1565c0;">' + Math.round(f.altitude) + 'm</div>',
-        '<div style="font-size:9px;color:#5a8aaa;">' + altFt + ' ft</div>',
-        '</div>',
-        '<div style="background:#e8f5e9;border-radius:6px;padding:6px;text-align:center;">',
-        '<div style="font-size:13px;font-weight:700;color:#2e7d32;">' + f.speed + ' km/h</div>',
-        '<div style="font-size:9px;color:#5a8aaa;">속도</div>',
-        '</div></div>',
-        '<div style="font-size:11px;color:#555;line-height:1.8;border-top:1px solid #eee;padding-top:6px;">',
-        '🌏 ' + f.country + '&nbsp;&nbsp;🧭 ' + Math.round(f.heading) + '°<br>',
-        '<span style="color:' + statusColor + ';font-weight:600;">' + statusTxt + '</span>',
-        '</div></div>',
-        '<div style="padding:6px 12px 10px;background:#f8f9fa;border-top:1px solid #eee;text-align:center;">',
-        '<div style="background:#1565c0;border-radius:6px;padding:6px;font-size:11px;color:#fff;cursor:pointer;font-weight:600;" title="' + f.callsign + '" onclick="window._selectFlight(this)">',
-        '✅ 아래 검색창에 <b>' + f.callsign + '</b> 입력 후 검색</div></div></div>'
-    ].join('');
-}}
+    var statusColor = f.on_ground ? "#757575" : "#2e7d32";
+    var statusTxt   = f.on_ground ? "🛬 지상 대기" : "✈️ 비행 중";
+    var al = getAirlineInfo(f.callsign);
+    // ADS-B 실제 데이터 있을 때만 표시, 없으면 미확인
+    var depLabel = (f.orig && f.orig.length >= 3) ? (f.origName || f.orig) : "미확인";
+    var arrLabel = (f.dest && f.dest.length >= 3) ? (f.destName || f.dest) : "미확인";
+    var nameHtml = (al.name || f.desc || "");
 
+    var logoHtml = "";
+    if(al.logo) {{
+        logoHtml = "<img src=" + al.logo + " style=width:32px;height:32px;object-fit:contain;border-radius:4px;background:#fff;padding:2px; onerror=this.remove()>";
+    }}
+
+    var photoHtml = "";
+    if(f.icao) {{
+        var photoUrl = "https://api.airplanes.live/v2/aircraft-image/" + f.icao;
+        photoHtml = "<div style=background:#111;><img src=" + photoUrl + " style=width:100%;height:100px;object-fit:cover; onerror=this.parentNode.remove()></div>";
+    }}
+
+    var html = "";
+    html += "<div style=font-family:Arial,sans-serif;min-width:240px;max-width:280px;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.2);>";
+    html += "<div style=background:" + al.color + ";padding:10px 14px;display:flex;align-items:center;justify-content:space-between;>";
+    html += "<div>";
+    html += "<div style=font-size:15px;font-weight:700;color:#fff;letter-spacing:1px;>" + f.callsign + "</div>";
+    if(nameHtml) html += "<div style=font-size:11px;color:rgba(255,255,255,0.85);margin-top:2px;>" + nameHtml + "</div>";
+    html += "</div>";
+    html += logoHtml;
+    html += "</div>";
+    html += photoHtml;
+    html += "<div style=padding:10px 14px;background:#fff;>";
+    html += "<div style=display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;>";
+    html += "<div style=text-align:center;><div style=font-size:18px;font-weight:700;color:#333;>" + depLabel + "</div><div style=font-size:10px;color:#888;>출발</div></div>";
+    html += "<div style=font-size:20px;color:" + al.color + ";>✈</div>";
+    html += "<div style=text-align:center;><div style=font-size:18px;font-weight:700;color:#333;>" + arrLabel + "</div><div style=font-size:10px;color:#888;>도착</div></div>";
+    html += "</div>";
+    html += "<div style=display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px;>";
+    html += "<div style=background:#e3f2fd;border-radius:6px;padding:6px;text-align:center;><div style=font-size:12px;font-weight:700;color:#1565c0;>" + Math.round(f.altitude) + "m</div><div style=font-size:9px;color:#888;>" + altFt + "ft</div></div>";
+    html += "<div style=background:#e8f5e9;border-radius:6px;padding:6px;text-align:center;><div style=font-size:12px;font-weight:700;color:#2e7d32;>" + Math.round(f.speed) + "</div><div style=font-size:9px;color:#888;>km/h</div></div>";
+    html += "<div style=background:#fff3e0;border-radius:6px;padding:6px;text-align:center;><div style=font-size:12px;font-weight:700;color:#e65100;>" + Math.round(f.heading) + "°</div><div style=font-size:9px;color:#888;>방향</div></div>";
+    html += "</div>";
+    html += "<div style=font-size:11px;color:#555;border-top:1px solid #eee;padding-top:6px;display:flex;justify-content:space-between;>";
+    html += "<span>🌏 " + f.country + "</span>";
+    html += "<span style=color:" + statusColor + ";font-weight:600;>" + statusTxt + "</span>";
+    html += "</div></div>";
+    html += "<div style=padding:8px 14px 10px;background:#f8f9fa;border-top:1px solid #eee;>";
+    html += "<div style=background:" + al.color + ";border-radius:8px;padding:8px;font-size:12px;color:#fff;cursor:pointer;font-weight:600;text-align:center; title=" + f.callsign + " onclick=window._selectFlight(this)>";
+    html += "🔍 " + f.callsign + " 상세 검색</div></div></div>";
+    return html;
+}}
 // 방향 기반 목적지 추정 함수 (개선버전)
 function estimateDestination(f) {{
     if(!f || !f.lat || !f.lon || !f.heading) return null;
@@ -1543,14 +1746,21 @@ function selectFlight(callsign) {{
         var p = planes[callsign];
         p.marker.setIcon(getPlaneIcon(p.heading, getColor(p.altitude, p.on_ground), true));
     }}
-    // Streamlit iframe 환경에서는 pushState 차단됨 → parent로만 전달
+    // sessionStorage로 편명 전달 (깜빡임 없이 fragment에서 감지)
+    try {{
+        sessionStorage.setItem('sw_clicked_flight', callsign);
+        sessionStorage.setItem('sw_click_ts', Date.now().toString());
+    }} catch(e) {{}}
+    // parent query param도 병행 (폴백)
     try {{
         if(window.parent && window.parent !== window) {{
-            window.parent.postMessage({{type:'streamlit:setComponentValue', value:callsign}}, '*');
+            var url = new URL(window.parent.location.href);
+            url.searchParams.set('flight', callsign);
+            window.parent.history.replaceState(null, '', url.toString());
         }}
     }} catch(e) {{}}
     var notice = document.getElementById('clickNotice');
-    notice.innerHTML = '✈️ <b>' + callsign + '</b> 선택됨! 아래 검색창에 입력하세요';
+    notice.innerHTML = '✈️ <b>' + callsign + '</b> 클릭됨 — 아래 검색창에 편명이 입력됩니다';
     notice.style.display = 'block';
     notice.style.animation = 'none';
     notice.offsetHeight;
@@ -1767,17 +1977,17 @@ infoPanel.style.cssText = [
     'right:10px',
     'z-index:2000',
     'background:#ffffff',
-    'border:1px solid #dce8f5',
-    'border-radius:12px',
-    'padding:14px 16px',
-    'width:268px',
-    'max-width:268px',
+    'border:none',
+    'border-radius:14px',
+    'padding:0',
+    'width:320px',
+    'max-width:320px',
     'display:none',
     'font-family:Arial,sans-serif',
-    'box-shadow:0 4px 20px rgba(0,0,0,0.18)',
+    'box-shadow:0 8px 32px rgba(0,0,0,0.22)',
     'color:#263238',
-    'overflow-y:auto',
-    'max-height:640px'
+    'overflow:hidden',
+    'max-height:700px'
 ].join(';');
 document.querySelector('.map-wrap').appendChild(infoPanel);
 
@@ -1805,85 +2015,125 @@ function showInfoPanel(f, route) {{
     route = route || {{}};
     var altFt  = Math.round((f.altitude||0) * 3.28084);
     var spdKts = Math.round((f.speed||0) / 1.852);
-    var altColor = f.on_ground ? '#757575'
-        : (f.altitude > 8000 ? '#1565c0' : (f.altitude > 3000 ? '#2e7d32' : '#e65100'));
+    var al = getAirlineInfo(f.callsign);
+    var statusTxt = f.on_ground ? "🛬 지상" : "✈️ 비행중";
+    var altColor = f.altitude > 8000 ? "#1565c0" : (f.altitude > 3000 ? "#2e7d32" : "#e65100");
 
-    var statusBg  = f.on_ground ? '#f5f5f5' : '#e8f5e9';
-    var statusClr = f.on_ground ? '#757575' : '#2e7d32';
-    var statusTxt = f.on_ground ? '🛬 지상' : '✈️ 비행중';
+    // 출도착 (확인된 데이터만)
+    var depCode = route.depCode || "";
+    var arrCode = route.arrCode || "";
+    var depName = route.depName || "";
+    var arrName = route.arrName || "";
+    var depT    = route.depT   || "";
+    var arrT    = route.arrT   || "";
+    var airline = route.airline || "";
+    var hasRoute = !!(depCode || arrCode) && !!(route.src);
 
-    var depCode = route.depCode || '';
-    var arrCode = route.arrCode || '';
-    var depName = route.depName || '';
-    var arrName = route.arrName || '';
-    var depT    = route.depT   || '';
-    var arrT    = route.arrT   || '';
-    var airline = route.airline || '';
-    var src     = route.src    || '';
-    var hasRoute = !!(depCode || arrCode);
+    var html = "";
 
-    var routeHtml = '';
-    if(hasRoute) {{
-        routeHtml =
-            '<div style="margin:8px 0;background:#f0f7ff;border:1px solid #bbdefb;border-radius:8px;padding:10px;">' +
-            '<div style="display:flex;align-items:center;">' +
-            '<div style="flex:1;text-align:center;">' +
-            '<div style="font-size:20px;font-weight:900;color:#1565c0;">' + (depCode||'—') + '</div>' +
-            '<div style="font-size:10px;color:#5a7fa0;">' + (depName||'') + '</div>' +
-            (depT ? '<div style="font-size:9px;color:#90a4ae;">예정 <b style="color:#546e7a">' + depT + '</b></div>' : '') +
-            '</div>' +
-            '<div style="padding:0 8px;color:#90caf9;font-size:22px;font-weight:900;">→</div>' +
-            '<div style="flex:1;text-align:center;">' +
-            '<div style="font-size:20px;font-weight:900;color:#1565c0;">' + (arrCode||'—') + '</div>' +
-            '<div style="font-size:10px;color:#5a7fa0;">' + (arrName||'') + '</div>' +
-            (arrT ? '<div style="font-size:9px;color:#90a4ae;">예정 <b style="color:#546e7a">' + arrT + '</b></div>' : '') +
-            '</div>' +
-            '</div>' +
-            (airline ? '<div style="margin-top:5px;border-top:1px solid #bbdefb;padding-top:4px;font-size:9px;color:#90a4ae;display:flex;justify-content:space-between;"><span>' + airline + '</span>' + (src ? '<span style="color:#26a69a;">📡 ' + src + '</span>' : '') + '</div>' : '') +
-            '</div>';
+    // ── 항공기 사진 (Planespotters API - JS에서 직접 호출) ──
+    if(f.icao) {{
+        html += "<div id='sw_photo_wrap_" + f.icao + "' style='width:100%;height:130px;overflow:hidden;background:#1a1a2e;display:flex;align-items:center;justify-content:center;'>";
+        html += "<div style='color:#4a6080;font-size:12px;'>✈ 사진 로딩 중...</div>";
+        html += "</div>";
     }}
 
-    var html =
-        // 헤더
-        '<div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid #e3eaf0;margin-bottom:8px;">' +
-        '<span style="font-size:18px;font-weight:900;color:#1a237e;letter-spacing:1px;">' + (f.callsign||'미확인') + '</span>' +
-        '<div style="display:flex;align-items:center;gap:6px;">' +
-        '<span style="background:' + statusBg + ';color:' + statusClr + ';font-size:10px;padding:2px 9px;border-radius:12px;border:1px solid ' + statusClr + '44;font-weight:600;">' + statusTxt + '</span>' +
-        '<span style="cursor:pointer;color:#9e9e9e;font-size:18px;line-height:1;" onclick="closeInfoPanel()">✕</span>' +
-        '</div></div>' +
-        // 기종/등록
-        '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">' +
-        (f.desc ? '<span style="background:#e3f2fd;border:1px solid #90caf9;color:#1565c0;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600;">✈ ' + f.desc + '</span>' : '') +
-        (f.reg  ? '<span style="background:#e8eaf6;border:1px solid #9fa8da;color:#283593;font-size:10px;padding:2px 8px;border-radius:4px;">' + f.reg + '</span>' : '') +
-        '<span style="background:#f3f3f3;border:1px solid #ddd;color:#555;font-size:10px;padding:2px 8px;border-radius:4px;">🌏 ' + (f.country||'미확인') + '</span>' +
-        '</div>' +
-        routeHtml +
-        // 수치 3칸
-        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px;">' +
-        '<div style="text-align:center;background:#e3f2fd;border-radius:8px;padding:8px 4px;">' +
-        '<div style="font-size:14px;font-weight:700;color:' + altColor + ';">' + Math.round(f.altitude||0) + 'm</div>' +
-        '<div style="font-size:8px;color:#78909c;margin-top:2px;">고도</div>' +
-        '<div style="font-size:8px;color:#b0bec5;">' + altFt + 'ft</div>' +
-        '</div>' +
-        '<div style="text-align:center;background:#e8f5e9;border-radius:8px;padding:8px 4px;">' +
-        '<div style="font-size:14px;font-weight:700;color:#2e7d32;">' + (f.speed||0) + '<span style="font-size:8px">km/h</span></div>' +
-        '<div style="font-size:8px;color:#78909c;margin-top:2px;">속도</div>' +
-        '<div style="font-size:8px;color:#b0bec5;">' + spdKts + 'kts</div>' +
-        '</div>' +
-        '<div style="text-align:center;background:#f3e5f5;border-radius:8px;padding:8px 4px;">' +
-        '<div style="font-size:14px;font-weight:700;color:#6a1b9a;">' + Math.round(f.heading||0) + '°</div>' +
-        '<div style="font-size:8px;color:#78909c;margin-top:2px;">방향</div>' +
-        '<div style="font-size:8px;color:#b0bec5;">&nbsp;</div>' +
-        '</div>' +
-        '</div>' +
-        // ICAO/좌표
-        '<div style="font-size:9px;color:#b0bec5;display:flex;justify-content:space-between;border-top:1px solid #eceff1;padding-top:5px;">' +
-        '<span style="color:#90a4ae;">ICAO <b style="color:#1565c0">' + (f.icao||'').toUpperCase() + '</b></span>' +
-        '<span>📍 ' + (f.lat||0).toFixed(3) + ', ' + (f.lon||0).toFixed(3) + '</span>' +
-        '</div>';
+    // ── 헤더 ──
+    html += "<div style='background:" + al.color + ";padding:10px 14px;display:flex;align-items:center;justify-content:space-between;'>";
+    html += "<div>";
+    html += "<div style='font-size:18px;font-weight:900;color:#fff;letter-spacing:1px;'>" + (f.callsign||"미확인") + "</div>";
+    if(al.name) html += "<div style='font-size:11px;color:rgba(255,255,255,0.85);margin-top:1px;'>" + al.name + "</div>";
+    html += "</div>";
+    html += "<div style='display:flex;align-items:center;gap:6px;'>";
+    if(al.logo) html += "<img src='" + al.logo + "' style='width:32px;height:32px;object-fit:contain;background:#fff;border-radius:4px;padding:2px;' onerror='this.remove()'>";
+    html += "<span style='background:rgba(255,255,255,0.2);color:#fff;font-size:10px;padding:2px 8px;border-radius:10px;'>" + statusTxt + "</span>";
+    html += "<span style='cursor:pointer;color:rgba(255,255,255,0.8);font-size:20px;line-height:1;' onclick='closeInfoPanel()'>✕</span>";
+    html += "</div></div>";
+
+    // ── 본문 ──
+    html += "<div style='padding:12px 14px;'>";
+
+    // 기종/등록 뱃지
+    html += "<div style='display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;'>";
+    if(f.desc) html += "<span style='background:#e3f2fd;border:1px solid #90caf9;color:#1565c0;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600;'>✈ " + f.desc + "</span>";
+    if(f.reg)  html += "<span style='background:#e8eaf6;border:1px solid #9fa8da;color:#283593;font-size:10px;padding:2px 8px;border-radius:4px;'>" + f.reg + "</span>";
+    html += "<span style='background:#f3f3f3;border:1px solid #ddd;color:#555;font-size:10px;padding:2px 8px;border-radius:4px;'>🌏 " + (f.country||"미확인") + "</span>";
+    html += "</div>";
+
+    // 출도착 박스
+    if(hasRoute) {{
+        html += "<div style='background:#f0f7ff;border:1px solid #bbdefb;border-radius:10px;padding:12px;margin-bottom:10px;'>";
+        html += "<div style='display:flex;align-items:center;justify-content:space-between;'>";
+        html += "<div style='text-align:center;flex:1;'>";
+        html += "<div style='font-size:22px;font-weight:900;color:#1565c0;'>" + (depCode||"—") + "</div>";
+        html += "<div style='font-size:11px;color:#5a7fa0;margin-top:2px;'>" + (depName||"") + "</div>";
+        if(depT) html += "<div style='font-size:9px;color:#90a4ae;'>예정 <b>" + depT + "</b></div>";
+        html += "</div>";
+        html += "<div style='font-size:28px;color:#90caf9;font-weight:900;padding:0 8px;'>→</div>";
+        html += "<div style='text-align:center;flex:1;'>";
+        html += "<div style='font-size:22px;font-weight:900;color:#1565c0;'>" + (arrCode||"—") + "</div>";
+        html += "<div style='font-size:11px;color:#5a7fa0;margin-top:2px;'>" + (arrName||"") + "</div>";
+        if(arrT) html += "<div style='font-size:9px;color:#90a4ae;'>예정 <b>" + arrT + "</b></div>";
+        html += "</div></div>";
+        if(airline) html += "<div style='margin-top:6px;border-top:1px solid #bbdefb;padding-top:5px;font-size:9px;color:#90a4ae;'>" + airline + " <span style='color:#26a69a;float:right;'>📡 " + (route.src||"") + "</span></div>";
+        html += "</div>";
+    }}
+
+    // 수치 3칸
+    html += "<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;'>";
+    html += "<div style='text-align:center;background:#e3f2fd;border-radius:8px;padding:8px 4px;'>";
+    html += "<div style='font-size:15px;font-weight:700;color:" + altColor + ";'>" + Math.round(f.altitude||0) + "m</div>";
+    html += "<div style='font-size:8px;color:#78909c;margin-top:2px;'>고도</div>";
+    html += "<div style='font-size:8px;color:#b0bec5;'>" + altFt + "ft</div>";
+    html += "</div>";
+    html += "<div style='text-align:center;background:#e8f5e9;border-radius:8px;padding:8px 4px;'>";
+    html += "<div style='font-size:15px;font-weight:700;color:#2e7d32;'>" + (f.speed||0) + "<span style='font-size:8px;'>km/h</span></div>";
+    html += "<div style='font-size:8px;color:#78909c;margin-top:2px;'>속도</div>";
+    html += "<div style='font-size:8px;color:#b0bec5;'>" + spdKts + "kts</div>";
+    html += "</div>";
+    html += "<div style='text-align:center;background:#f3e5f5;border-radius:8px;padding:8px 4px;'>";
+    html += "<div style='font-size:15px;font-weight:700;color:#6a1b9a;'>" + Math.round(f.heading||0) + "°</div>";
+    html += "<div style='font-size:8px;color:#78909c;margin-top:2px;'>방향</div>";
+    html += "<div style='font-size:8px;color:#b0bec5;'>&nbsp;</div>";
+    html += "</div></div>";
+
+    // ICAO/좌표
+    html += "<div style='font-size:9px;color:#b0bec5;display:flex;justify-content:space-between;border-top:1px solid #eceff1;padding-top:6px;'>";
+    html += "<span style='color:#90a4ae;'>ICAO <b style='color:#1565c0;'>" + (f.icao||"").toUpperCase() + "</b></span>";
+    html += "<span>📍 " + (f.lat||0).toFixed(3) + ", " + (f.lon||0).toFixed(3) + "</span>";
+    html += "</div></div>";
 
     infoPanel.innerHTML = html;
-    infoPanel.style.display = 'block';
+    infoPanel.style.display = "block";
+
+    // Planespotters API로 사진 로드
+    if(f.icao) {{
+        var wrapId = "sw_photo_wrap_" + f.icao;
+        fetch("https://api.planespotters.net/pub/photos/hex/" + f.icao)
+            .then(function(r) {{ return r.json(); }})
+            .then(function(data) {{
+                var wrap = document.getElementById(wrapId);
+                if(!wrap) return;
+                var photos = data.photos || [];
+                if(photos.length > 0) {{
+                    var imgUrl = photos[0].thumbnail_large
+                        ? photos[0].thumbnail_large.src
+                        : (photos[0].thumbnail ? photos[0].thumbnail.src : "");
+                    if(imgUrl) {{
+                        wrap.innerHTML = "<img src='" + imgUrl + "' style='width:100%;height:130px;object-fit:cover;display:block;'>";
+                        wrap.style.background = "#111";
+                    }} else {{
+                        wrap.remove();
+                    }}
+                }} else {{
+                    wrap.remove();
+                }}
+            }})
+            .catch(function() {{
+                var wrap = document.getElementById(wrapId);
+                if(wrap) wrap.remove();
+            }});
+    }}
 }}
 
 // ── selectFlight 확장: 패널 + ADS-B 기반 항적 ──
@@ -1934,10 +2184,10 @@ selectFlight = function(callsign) {{
 st.components.v1.html(map_html, height=700, scrolling=False)
 
 # ── 지도 클릭 → 편명 자동 입력 처리 ──
-# query_params에서 클릭된 편명 감지
 url_flight = st.query_params.get("flight", "")
-if url_flight:
+if url_flight and url_flight != st.session_state.get("_last_searched", ""):
     st.session_state.callsign_input = url_flight
+    st.session_state["_auto_search"] = url_flight  # 자동검색 트리거
 
 st.markdown("---")
 
@@ -1947,11 +2197,16 @@ def bottom_panel():
     # flights 데이터는 fragment 안에서도 session_state 경유로 접근
     flights = st.session_state.get("_flights_cache", [])
 
-    col_l, col_ml, col_mr, col_r = st.columns([1, 1, 1, 1])
+    # ── 지도 클릭 자동 감지 ──
+    _auto = st.session_state.pop("_auto_search", None)
+    if _auto and _auto != st.session_state.get("_last_searched", ""):
+        st.session_state.callsign_input = _auto
+
+    col_l, col_ml, col_mr, col_r = st.columns([1.2, 1.8, 1.8, 1.5])
 
     with col_l:
         st.markdown('<div class="section-title">🔍 편명 검색</div>', unsafe_allow_html=True)
-        st.markdown('<div class="click-hint">💡 지도에서 항공기를 클릭하면 자동 입력돼요</div>', unsafe_allow_html=True)
+        st.markdown('<div class="click-hint">💡 지도에서 항공기를 클릭하면 자동 검색돼요</div>', unsafe_allow_html=True)
 
         callsign_input = st.text_input(
             "편명 입력",
@@ -1962,8 +2217,9 @@ def bottom_panel():
         )
         search_btn = st.button("🔍 검색", use_container_width=True)
 
-        # 엔터키(입력값 변경) 또는 버튼 클릭 모두 검색 실행
-        do_search = search_btn or (
+        # 버튼 클릭 OR 지도 클릭 자동검색 OR 엔터
+        auto_triggered = (_auto is not None)
+        do_search = search_btn or auto_triggered or (
             callsign_input and
             callsign_input != st.session_state.get("_last_searched", "")
         )
@@ -2139,88 +2395,78 @@ def bottom_panel():
     current_flight = st.session_state.get("current_flight")
     flight_spd     = st.session_state.get("flight_spd", 0)
 
-    # ── col_ml: 비행 진행률 + ETA + 도착 임박 알림 ──
+    # ── col_ml: 비행 진행률 + ETA + 지연결항 ──
     with col_ml:
         st.markdown('<div class="section-title">📊 비행 진행률</div>', unsafe_allow_html=True)
-
         if current_flight and dest_airport:
             cur_lat = current_flight[6]
             cur_lon = current_flight[5]
-            # dep_airport 없으면 현재위치에서 가장 먼 공항을 출발지로 추정
             eff_dep = dep_airport
             if not eff_dep:
                 eff_dep = max(AIRPORTS, key=lambda a: dist_km(cur_lat, cur_lon, a["lat"], a["lon"]))
-            # 출발지와 목적지가 같으면 진행률 계산 불가
             if eff_dep and eff_dep["iata"] == dest_airport["iata"]:
                 eff_dep = None
             prog = calc_flight_progress(cur_lat, cur_lon, eff_dep, dest_airport, flight_spd)
-
             if prog:
-                pct = prog["progress"]
-                eta_min = prog["eta_min"]
-                eta_time = prog["eta_time"]
+                pct       = prog["progress"]
+                eta_min   = prog["eta_min"]
+                eta_time  = prog["eta_time"]
                 remain_km = prog["remain_km"]
-                total_km = prog["total_km"]
-
+                total_km  = prog["total_km"]
                 dep_label = eff_dep["iata"] if eff_dep else "출발"
                 arr_label = dest_airport["iata"]
 
-                # 진행률 바
+                # ── 진행률 + ETA 통합 카드 ──
+                alert_html = ""
+                if eta_min is not None and eta_min <= 20:
+                    alert_html = f'<div style="margin-top:8px;padding:8px 10px;background:#0d2200;border-radius:8px;border-left:3px solid #76c442;font-size:0.82rem;color:#b8e986;">🔔 <b>도착 임박!</b> {dest_airport["name"]}까지 약 <b>{eta_min}분</b></div>'
+                elif eta_min is not None and eta_min <= 45:
+                    alert_html = f'<div style="margin-top:8px;padding:8px 10px;background:#2d1800;border-radius:8px;border-left:3px solid #ffa726;font-size:0.82rem;color:#ffe0b2;">⏰ <b>곧 도착</b> — 약 {eta_min}분 후 예정</div>'
+
                 st.markdown(f"""
-                <div class="progress-card">
-                    <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-                        <span class="airport-badge">🛫 {dep_label}</span>
-                        <span style="font-size:0.85rem;color:#4fc3f7;font-weight:700;">{pct:.0f}%</span>
-                        <span class="airport-badge">🛬 {arr_label}</span>
+                <div class="result-card" style="padding:14px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <div style="text-align:center;">
+                            <div style="font-size:0.95rem;font-weight:700;color:#4fc3f7;">🛫 {dep_label}</div>
+                        </div>
+                        <div style="text-align:center;">
+                            <div style="font-size:1.5rem;font-weight:900;color:#e0e6f0;">{pct:.0f}%</div>
+                            <div style="font-size:0.68rem;color:#4a6080;">진행률</div>
+                        </div>
+                        <div style="text-align:center;">
+                            <div style="font-size:0.95rem;font-weight:700;color:#ffa726;">🛬 {arr_label}</div>
+                        </div>
                     </div>
                     <div class="progress-bar-wrap">
                         <div class="progress-bar-fill" style="width:{pct}%;">
-                            <span style="position:absolute;right:-10px;top:50%;transform:translateY(-50%);font-size:16px;">✈️</span>
+                            <span style="position:absolute;right:-10px;top:50%;transform:translateY(-50%);font-size:14px;">✈️</span>
                         </div>
                     </div>
-                    <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:#7ab3d4;margin-top:4px;">
-                        <span>총 {total_km}km</span>
-                        <span>남은거리 {remain_km}km</span>
+                    <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#4a6080;margin-top:4px;">
+                        <span>총 {total_km}km</span><span>남은 {remain_km}km</span>
                     </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;
+                                background:#0a1628;border-radius:8px;padding:10px 14px;margin-top:10px;">
+                        <div>
+                            <div style="font-size:0.7rem;color:#4a6080;">예상 도착 (KST)</div>
+                            <div style="font-size:1.5rem;font-weight:700;color:#4fc3f7;">🕐 {eta_time if eta_time else "—"}</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="font-size:0.7rem;color:#4a6080;">남은 시간</div>
+                            <div style="font-size:1.2rem;font-weight:700;color:#ffa726;">{str(eta_min)+"분" if eta_min else "—"}</div>
+                        </div>
+                    </div>
+                    {alert_html}
                 </div>
                 """, unsafe_allow_html=True)
-
-                # ETA 카드
-                if eta_time:
-                    st.markdown(f"""
-                    <div class="result-card" style="text-align:center;padding:14px;">
-                        <div style="font-size:0.75rem;color:#7ab3d4;margin-bottom:4px;">예상 도착 시각 (KST)</div>
-                        <div class="eta-big">🕐 {eta_time}</div>
-                        <div class="eta-label">약 {eta_min}분 후</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                # 도착 임박 알림
-                if eta_min is not None and eta_min <= 20:
-                    st.markdown(f"""
-                    <div class="arrival-alert">
-                        🔔 <b style="color:#76c442">도착 임박!</b><br>
-                        <span style="font-size:0.85rem;color:#b8e986;">
-                            {dest_airport["name"]}까지<br>
-                            약 <b>{eta_min}분</b> 남았어요
-                        </span>
-                    </div>
-                    """, unsafe_allow_html=True)
-                elif eta_min is not None and eta_min <= 45:
-                    st.markdown(f"""
-                    <div class="arrival-alert-warn">
-                        ⏰ <b style="color:#ffa726">곧 도착</b><br>
-                        <span style="font-size:0.85rem;color:#ffe0b2;">약 {eta_min}분 후 도착 예정</span>
-                    </div>
-                    """, unsafe_allow_html=True)
             else:
-                st.markdown('<div class="alert-banner" style="border-color:#4a6080;color:#7ab3d4;">경로 정보를 계산하는 중이에요</div>', unsafe_allow_html=True)
+                st.markdown('<div class="alert-banner" style="border-color:#4a6080;color:#7ab3d4;">경로 계산 중...</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div class="alert-banner" style="border-color:#4a6080;color:#7ab3d4;">✈️ 편명 검색하면 진행률이 표시돼요</div>', unsafe_allow_html=True)
+            st.markdown('<div class="alert-banner" style="border-color:#4a6080;color:#7ab3d4;padding:30px;text-align:center;">✈️ 편명 검색 후<br>진행률이 표시됩니다</div>', unsafe_allow_html=True)
 
-        # 지연·결항 (접어서)
+        # ── 지연·결항 ──
         if dest_airport:
-            st.markdown(f'<div class="section-title" style="margin-top:14px;">🚨 지연·결항</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-title" style="margin-top:12px;">🚨 지연·결항</div>', unsafe_allow_html=True)
             airport_delays = get_airport_delays(dest_airport["keyword"])
             if airport_delays:
                 for d in airport_delays[:3]:
@@ -2230,14 +2476,19 @@ def bottom_panel():
                     card_color = "#c0392b" if is_cancel else "#e67e22"
                     status_icon = "🚫 결항" if is_cancel else "🕐 지연"
                     st.markdown(f"""
-                    <div class="alert-banner" style="border-color:{card_color};margin:3px 0;padding:8px 12px;">
-                        <span style="color:{card_color};font-weight:600;">{status_icon}</span>
-                        &nbsp;<b style="color:#fff">{d["flight_id"]}</b> {d["airline"]}<br>
-                        <span style="font-size:0.75rem;color:#cd8888;">{sched_fmt} | {d["remark"]}</span>
+                    <div style="display:flex;justify-content:space-between;align-items:center;
+                                background:#0a1628;border-radius:8px;padding:8px 12px;margin:3px 0;
+                                border-left:3px solid {card_color};">
+                        <div>
+                            <span style="color:{card_color};font-weight:700;font-size:0.8rem;">{status_icon}</span>
+                            &nbsp;<b style="color:#e0e6f0;font-size:0.85rem;">{d["flight_id"]}</b>
+                            <span style="color:#7ab3d4;font-size:0.75rem;"> {d["airline"]}</span>
+                        </div>
+                        <div style="font-size:0.72rem;color:#888;">{sched_fmt}</div>
                     </div>
                     """, unsafe_allow_html=True)
             else:
-                st.markdown('<div class="alert-banner" style="border-color:#27ae60;color:#7ecba1;padding:8px 12px;">✅ 지연·결항 없음</div>', unsafe_allow_html=True)
+                st.markdown('<div style="background:#0a1628;border-radius:8px;padding:10px 14px;border-left:3px solid #27ae60;font-size:0.82rem;color:#7ecba1;">✅ 지연·결항 없음</div>', unsafe_allow_html=True)
 
     # ── col_mr: 목적지 날씨 + 시간대별 예보 ──
     with col_mr:
@@ -2245,50 +2496,52 @@ def bottom_panel():
             st.markdown(f'<div class="section-title">🌤️ {dest_airport["name"]} 날씨</div>', unsafe_allow_html=True)
             apt_weather = get_airport_weather(dest_airport["nx"], dest_airport["ny"])
             if apt_weather and apt_weather["temp"] is not None:
-                w = apt_weather
+                w       = apt_weather
                 sky_i   = sky_icon(w.get("sky"), w.get("rain"), w.get("wind_speed"))
                 w_arrow = wind_arrow(w["wind_dir"])
                 rain_val = w["rain"] or 0
-                rain_html = f'<div style="margin-top:8px;padding:6px 10px;background:#2d1800;border-radius:6px;color:#ffa726;font-size:0.82rem;">⚠️ 강수 {rain_val}mm</div>' if rain_val > 0 else '<div style="margin-top:8px;padding:6px 10px;background:#0d2200;border-radius:6px;color:#76c442;font-size:0.82rem;">✅ 맑음 · 강수 없음</div>'
+                rain_html = f'<div style="padding:6px 10px;background:#2d1800;border-radius:6px;color:#ffa726;font-size:0.8rem;">⚠️ 강수 {rain_val}mm</div>' if rain_val > 0 else '<div style="padding:6px 10px;background:#0d2200;border-radius:6px;color:#76c442;font-size:0.8rem;">✅ 맑음 · 강수 없음</div>'
                 st.markdown(f"""
-                <div class="result-card">
-                    <div style="display:flex;align-items:center;gap:12px;">
-                        <div style="font-size:2.4rem;">{sky_i}</div>
-                        <div>
-                            <div style="font-size:1.8rem;font-weight:700;color:#4fc3f7;">{w["temp"]}°C</div>
-                            <div style="font-size:0.78rem;color:#7ab3d4;">습도 {w["humidity"] or 0}% &nbsp;|&nbsp; 💨{w_arrow} {w["wind_speed"] or 0}m/s</div>
+                <div class="result-card" style="padding:14px;">
+                    <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
+                        <div style="font-size:3rem;line-height:1;">{sky_i}</div>
+                        <div style="flex:1;">
+                            <div style="font-size:2rem;font-weight:700;color:#4fc3f7;line-height:1;">{w["temp"]}°C</div>
+                            <div style="font-size:0.72rem;color:#7ab3d4;margin-top:4px;">
+                                💧 습도 {w["humidity"] or 0}%
+                                &nbsp;|&nbsp;
+                                💨 {w_arrow} {w["wind_speed"] or 0}m/s
+                            </div>
                         </div>
                     </div>
                     {rain_html}
                 </div>
                 """, unsafe_allow_html=True)
 
-            # 시간대별 예보 (도착 시간대)
-            st.markdown('<div style="font-size:0.8rem;color:#4fc3f7;margin:10px 0 4px 0;">⏱️ 시간대별 예보</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.78rem;color:#4fc3f7;margin:8px 0 4px 0;font-weight:600;">⏱️ 시간대별 예보</div>', unsafe_allow_html=True)
             forecasts = get_weather_forecast(dest_airport["nx"], dest_airport["ny"])
             if forecasts:
                 cells = ""
                 for fc in forecasts:
                     t = fc.get("time", "")
                     t_fmt = (t[:2] + ":" + t[2:]) if len(t) == 4 else t
-                    icon = forecast_sky_icon(fc.get("pty", 0), fc.get("sky"))
-                    temp = fc.get("temp", "—")
-                    rain = fc.get("rain", 0) or 0
-                    rain_html = ('<div style="font-size:0.62rem;color:#64b5f6;">' + str(rain) + "mm</div>") if rain > 0 else ""
+                    icon  = forecast_sky_icon(fc.get("pty", 0), fc.get("sky"))
+                    temp  = fc.get("temp", "—")
+                    rain  = fc.get("rain", 0) or 0
+                    rain_str = ('<div style="font-size:0.6rem;color:#64b5f6;">' + str(rain) + "mm</div>") if rain > 0 else ""
                     cells += (
                         '<div class="forecast-cell">'
                         + '<div class="fc-time">' + str(t_fmt) + "</div>"
                         + '<div class="fc-icon">' + str(icon) + "</div>"
                         + '<div class="fc-temp">' + str(temp) + "°</div>"
-                        + rain_html
-                        + "</div>"
+                        + rain_str + "</div>"
                     )
                 st.markdown('<div class="forecast-row">' + cells + "</div>", unsafe_allow_html=True)
             else:
-                st.markdown('<div style="font-size:0.8rem;color:#4a6080;">예보 데이터 없음</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:0.78rem;color:#4a6080;">예보 데이터 없음</div>', unsafe_allow_html=True)
         else:
             st.markdown('<div class="section-title">🌤️ 목적지 날씨</div>', unsafe_allow_html=True)
-            st.markdown('<div class="alert-banner" style="border-color:#4a6080;color:#7ab3d4;">✈️ 편명 검색하면 목적지 날씨 + 예보가 표시돼요</div>', unsafe_allow_html=True)
+            st.markdown('<div class="alert-banner" style="border-color:#4a6080;color:#7ab3d4;padding:30px;text-align:center;">✈️ 편명 검색 후<br>목적지 날씨가 표시됩니다</div>', unsafe_allow_html=True)
 
     # ── col_r: 공항 정보 + 도착 안내 ──
     with col_r:
@@ -2423,60 +2676,6 @@ def fids_panel():
 
 fids_panel()
 
-# ── AI 기상·운항 종합 분석 패널 (fragment - 독립 렌더링) ──
-@st.fragment
-def ai_analysis_panel():
-    st.markdown("---")
-    st.markdown('<div class="section-title">🤖 AI 기상·운항 종합 분석</div>', unsafe_allow_html=True)
-
-    ai_col1, ai_col2 = st.columns([3, 1])
-    with ai_col1:
-        st.markdown(
-            '<div style="font-size:0.82rem;color:#7ab3d4;">편명을 검색한 뒤 아래 버튼을 누르면 Claude AI가 기상·운항 데이터를 종합 분석해드립니다.</div>',
-            unsafe_allow_html=True
-        )
-    with ai_col2:
-        run_ai = st.button("✨ AI 분석 실행", use_container_width=True)
-
-    if run_ai:
-        searched = st.session_state.get("searched_callsign", "")
-        if not searched:
-            st.warning("먼저 상단에서 편명을 검색해주세요.")
-        else:
-            with st.spinner("🤖 Claude AI가 분석 중입니다..."):
-                f_info = {
-                    "callsign": st.session_state.get("ai_callsign", searched),
-                    "dep":      st.session_state.get("ai_dep", "알 수 없음"),
-                    "arr":      st.session_state.get("ai_arr", "알 수 없음"),
-                    "alt":      st.session_state.get("ai_alt", "알 수 없음"),
-                    "speed":    st.session_state.get("ai_speed", "알 수 없음"),
-                    "eta":      st.session_state.get("ai_eta", "계산 중"),
-                }
-                w_info = st.session_state.get("ai_weather", {})
-                d_info = st.session_state.get("ai_delays", [])
-                analysis = analyze_flight_weather_ai(f_info, w_info, d_info)
-                st.session_state["ai_result"] = analysis
-
-        if st.session_state.get("ai_result"):
-            analysis_text = st.session_state["ai_result"]
-            st.markdown(f"""
-            <div style="
-                background: linear-gradient(135deg, #0d2137, #1a3a5c);
-                border: 1px solid #2E75B6;
-                border-left: 5px solid #4fc3f7;
-                border-radius: 12px;
-                padding: 18px 20px;
-                margin-top: 10px;
-                font-size: 0.88rem;
-                color: #e0e6f0;
-                line-height: 1.8;
-            ">
-                <div style="font-size:0.75rem;color:#4fc3f7;margin-bottom:8px;">🤖 Claude AI 종합 분석 결과</div>
-                {analysis_text}
-            </div>
-            """, unsafe_allow_html=True)
-
-ai_analysis_panel()
 
 # ── 푸터 ──
 st.markdown("---")

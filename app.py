@@ -401,7 +401,6 @@ def dist_km(lat1, lon1, lat2, lon2):
     return R * 2 * math.asin(math.sqrt(a))
 
 # ── API 함수 ──
-@st.cache_data(ttl=60)
 def get_flights():
     """airplanes.live + OpenSky Network 두 API 병합, ICAO hex로 중복 제거"""
     seen = {}   # icao24 → 데이터 (중복 제거용)

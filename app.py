@@ -1495,55 +1495,51 @@ var planes = {{}};
 var selectedCallsign = '';
 var routeLayer = null;
 
-// ── JS 직접 ADS-B fetch (서버 차단 우회) ──
+// ── JS 직접 OpenSky fetch (CORS 허용) ──
 function fetchFlightsFromBrowser() {{
-    fetch('https://api.airplanes.live/v2/point/34.5/127.5/600', {{
-        headers: {{'User-Agent': 'SkyWatch/3.0'}}
-    }})
+    var url = 'https://opensky-network.org/api/states/all?lamin=33&lomin=124&lamax=39&lomax=132';
+    fetch(url)
     .then(function(r) {{ return r.json(); }})
     .then(function(data) {{
-        var ac = data.ac || [];
-        if(ac.length === 0) return;
-        console.log('[JS fetch] airplanes.live:', ac.length, '대');
+        var states = data.states || [];
+        if(states.length === 0) return;
+        console.log('[JS OpenSky] 수신:', states.length, '대');
         var newFlights = [];
-        ac.forEach(function(a) {{
-            if(!a.lat || !a.lon) return;
-            var alt_raw = a.alt_baro || 0;
-            var on_ground = alt_raw === 'ground';
-            var alt_m = on_ground ? 0 : (parseFloat(alt_raw) * 0.3048 || 0);
-            var spd_kmh = Math.round((parseFloat(a.gs) || 0) * 1.852);
+        states.forEach(function(s) {{
+            if(!s || s.length < 11 || !s[5] || !s[6]) return;
+            var lat = parseFloat(s[6]);
+            var lon = parseFloat(s[5]);
+            if(lat < 33 || lat > 39 || lon < 124 || lon > 132) return;
+            var alt_m = parseFloat(s[7]) || 0;
+            var on_ground = !!s[8];
+            var spd_kmh = Math.round((parseFloat(s[9]) || 0) * 3.6);
+            var icao = (s[0] || '').toLowerCase();
             newFlights.push({{
-                callsign: (a.flight || '').trim() || '미확인',
-                country: a.r || '',
-                lat: parseFloat(a.lat),
-                lon: parseFloat(a.lon),
+                callsign: (s[1] || '').trim() || '미확인',
+                country: s[2] || '',
+                lat: lat, lon: lon,
                 altitude: alt_m,
                 speed: spd_kmh,
-                heading: parseFloat(a.track) || 0,
+                heading: parseFloat(s[10]) || 0,
                 on_ground: on_ground,
-                desc: a.desc || '',
-                icao: (a.hex || '').toLowerCase(),
-                reg: a.r || '',
-                orig: (a.orig || a.from || '').toUpperCase(),
-                dest: (a.dest || a.to || '').toUpperCase(),
-                origName: '',
-                destName: '',
+                desc: '', icao: icao, reg: '',
+                orig: '', dest: '',
+                origName: '', destName: '',
                 origLat: null, origLon: null,
                 destLat: null, destLon: null,
             }});
         }});
         if(newFlights.length > 0) {{
-            // 기존 Python 데이터에 병합 (중복 ICAO 제거)
             var existing = {{}};
             flightsData.forEach(function(f) {{ existing[f.icao] = true; }});
             newFlights.forEach(function(f) {{
                 if(!existing[f.icao]) flightsData.push(f);
             }});
             updateFlights(flightsData);
-            console.log('[JS fetch] 총:', flightsData.length, '대');
+            console.log('[JS OpenSky] 총:', flightsData.length, '대');
         }}
     }})
-    .catch(function(e) {{ console.log('[JS fetch] 오류:', e); }});
+    .catch(function(e) {{ console.log('[JS OpenSky] 오류:', e); }});
 }}
 
 // 지도 로드 후 JS fetch 실행

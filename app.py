@@ -406,13 +406,14 @@ def get_flights():
     """airplanes.live + OpenSky Network 두 API 병합, ICAO hex로 중복 제거"""
     seen = {}   # icao24 → 데이터 (중복 제거용)
 
-    # ── 1. airplanes.live (반경 500nm로 확대) ──
+    # ── 1. airplanes.live ──
     try:
         r = requests.get(
             "https://api.airplanes.live/v2/point/34.5/127.5/600",
             headers={"User-Agent": "SkyWatch/3.0 (Korea Air Traffic Monitor)"},
             timeout=15
         )
+        print(f"[airplanes.live] status={r.status_code} deny={r.headers.get('x-deny-reason','')}")
         if r.status_code == 200:
             for ac in r.json().get("ac", []):
                 lat = ac.get("lat")
@@ -450,6 +451,7 @@ def get_flights():
             headers={"User-Agent": "SkyWatch/3.0 (Korea Air Traffic Monitor)"},
             timeout=15
         )
+        print(f"[OpenSky] status={r2.status_code} deny={r2.headers.get('x-deny-reason','')}")
         if r2.status_code == 200:
             for s in (r2.json().get("states") or []):
                 if not s or len(s) < 11:
